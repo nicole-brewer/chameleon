@@ -1,5 +1,6 @@
 #!/bin/bash
 
+echo "Soucing openrc.sh. You may be asked to authenticate..."
 source openrc.sh
 
 # Set default values
@@ -45,13 +46,13 @@ echo "You may teardown reserved resources at any time using ./teardown.sh"
 echo "blazar lease-delete $LEASE_NAME" > teardown.sh
    
 echo "Getting lease id..."
-lease_id=$(blazar lease-show  --format value -c  reservations "$LEASE_NAME" |grep \"id\"| cut -d \" -f4)
-echo "The lease id is $lease_id"
+LEASE_ID=$(blazar lease-show  --format value -c  reservations "$LEASE_NAME" |grep \"id\"| cut -d \" -f4)
+echo "The lease id is $LEASE_ID"
 
 
 echo "Getting the network ID associated with sharednet1..."
-network_id=$(openstack network show --format value -c id $PRIVATE_NETWORK_NAME)
-echo "The network id is $network_id"
+NETWORK_ID=$(openstack network show --format value -c id $PRIVATE_NETWORK_NAME)
+echo "The network id is $NETWORK_ID"
 
 echo "Requesting a floating IP..."
 # Request a public floating IP (in the 'public' network)
@@ -64,6 +65,11 @@ if [ $? -ne 0 ]; then
 fi
 
 echo "Public IP for this lab is $SERVER_IP"
+
+# Remove lines starting with the server IP from .ssh/known_hosts
+sed -i.bak "/^$SERVER_IP/d" "$HOME/.ssh/known_hosts"
+
+echo "Removed $SERVER_IP from $HOME/.ssh/known_hosts"
 
 # add floating ip to teardown script
 echo "openstack floating ip delete $SERVER_IP" >> teardown.sh
@@ -104,8 +110,8 @@ echo "openstack security group delete $SECURITY_GROUP" >> teardown.sh
 openstack server create \
   --flavor "baremetal" \
   --image "CC-Ubuntu20.04" \
-  --nic net-id="$network_id" \
-  --hint reservation="$lease_id" \
+  --nic net-id="$NETWORK_ID" \
+  --hint reservation="$LEASE_ID" \
   --key-name="$SSHKEY_NAME" \
   --security-group "$SECURITY_GROUP"  \
   "$SERVER_NAME"
@@ -121,7 +127,6 @@ echo "Security group: $SECURITY_GROUP"
 echo "Public IP: $SERVER_IP"
 echo "SSH key: $SSHKEY_NAME"
 echo "|-----------------------------|"
-
 
 
 echo ""
@@ -177,7 +182,8 @@ ssh_status=""
 echo -n "Checking connection to $SERVER_IP on port 22..."
 
 # Define the SSH command
-login_command="ssh -i $SSHKEY_FILE -o ConnectTimeout=10 cc@$SERVER_IP"
+
+export LOGIN_COMMAND="ssh -i $SSHKEY_FILE -o ConnectTimeout=10 cc@$SERVER_IP"
 
 # Define the timeout and interval
 timeout=900  # 15 minutes in seconds
@@ -186,15 +192,15 @@ elapsed=0
 
 while [ $elapsed -lt $timeout ]; do
     # Execute command on server and check if it succeeded
-    if eval "$login_command" pwd; then
+    if eval "$LOGIN_COMMAND" pwd; then
         echo "SUCCESS: connected to the server and executed command."
         echo "To log into the server remotely, use"
         echo ""
-        echo "$login_command"
+        echo "$LOGIN_COMMAND"
         echo ""
         echo "To execute a command without logging in, use"
         echo ""
-        echo "eval \"$login_command\" <login_command>"
+        echo "eval \"$LOGIN_COMMAND\" <LOGIN_COMMAND>"
         exit 0
     else
         echo -n "."  # Print a dot without a newline

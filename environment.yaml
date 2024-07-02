@@ -1,0 +1,11 @@
+name: openstack
+channels:
+  - conda-forge
+dependencies:
+  - jupyterlab
+  - python=3.9
+  - pip
+  - pip:
+      - python-openstackclient
+      - python-blazarclient
+
