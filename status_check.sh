@@ -1,6 +1,6 @@
 #!/bin/bash
 
-source CHI-231217-openrc.sh
+source openrc.sh
 
 export OS_REGION_NAME='CHI@UC'
 export LEASE_NAME="$USER-test"
