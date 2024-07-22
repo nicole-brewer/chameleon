@@ -23,112 +23,76 @@ export PUBLIC_NETWORK_NAME="public" # default/recommended network
 export NODE_TYPE="compute_skylake" # a popular Intel CPU good for general applications
 export NUM_SERVERS=1
 
-
 echo "#######################################################"
 echo "#                                                     #"
 echo "#                       LEASE                         #"
 echo "#                                                     #"
 echo "#######################################################"
 
-echo "Getting lease status..."
+echo "Creating lease..."
+lease_status=""
+
+
+blazar lease-create --physical-reservation \
+      min="$NUM_SERVERS",max=$((NUM_SERVERS + 1 )),resource_properties='["=", "$node_type", "'"$NODE_TYPE"'"]' "$LEASE_NAME"
 lease_status=$(blazar lease-show --format value -c status "$LEASE_NAME")
 
-if [[ $lease_status == "ACTIVE" || $lease_status == "PENDING" || $lease_status == "STARTING" || $lease_status == "UPDATING" ]]; then
-    echo "Lease $LEASE_NAME already exists and is in a valid state: $lease_status"
-else
-    blazar lease-create --physical-reservation \
-          min="$NUM_SERVERS",max=$((NUM_SERVERS + 1 )),resource_properties='["=", "$node_type", "'"$NODE_TYPE"'"]' "$LEASE_NAME"
-    lease_status=$(blazar lease-show --format value -c status "$LEASE_NAME")
-fi
+echo "Lease status: $lease_status"
 
-echo "Waiting for lease to be ACTIVE" 
 # Now wait for lease to be ready before going to the next step
 while [[ $lease_status != "ACTIVE" ]]
 do
-   echo -n "."
    sleep 5
    lease_status=$(blazar lease-show --format value -c status "$LEASE_NAME")
 done
 
-LEASE_ID=$(blazar lease-show  --format value -c  reservations "$LEASE_NAME" |grep \"id\"| cut -d \" -f4)
-export LEASE_ID="$LEASE_ID"
-
-echo "The lease id is $LEASE_ID"
-
 echo "Lease $LEASE_NAME is ready for business."
 echo "Creating teardown.sh for deleting resources allocated in this script..."
-echo "You may teardown reserved resources at any time using"
-echo "     ./teardown.sh"
+echo "You may teardown reserved resources at any time using ./teardown.sh" 
 echo "blazar lease-delete $LEASE_NAME" > teardown.sh
+   
+echo "Getting lease id..."
+LEASE_ID=$(blazar lease-show  --format value -c  reservations "$LEASE_NAME" |grep \"id\"| cut -d \" -f4)
+echo "The lease id is $LEASE_ID"
 
-# Define the description to search for (the current user)
-description_to_search="$USER"
-
-lease_info=$(blazar lease-show --format json "$LEASE_NAME")
-# Extract and export the floating IP address from the lease info
-export SERVER_IP=$(echo "$lease_info" | jq -r '.reservations | fromjson | select(.resource_type=="virtual:floatingip") | .resource_id')
-
-if [ -n "$SERVER_IP" ]; then
-    echo "Floating IP $SERVER_IP already associated with lease $LEASE_NAMEP"
-else
-    echo "No floating IP associated with lease $LEASE_NAME"
-    echo "Checking for unassigned floating IPs created by $USER..."
-    # List all floating IPs and their descriptions, then filter based on the description
-    floating_ip=$(openstack floating ip list --format json -c "Floating IP Address" -c Description | \
-    jq -r --arg desc "$description_to_search" '.[] | select(.Description == $desc) | .["Floating IP Address"]')
-    
-    # Check if an unassigned floating IP was found with the appropriate description
-    if [ -n "$floating_ip" ]; then
-        echo "Found floating IP $floating_ip"
-        export SERVER_IP=$floating_ip
-    else
-        echo "No floating IP previously created by $description_to_search."
-        echo "Creating a floating IP..."
-        
-        # Step 1: Create the floating IP and capture its ID and address
-        floating_ip_info=$(openstack floating ip create public --format json)
-        # Check if the command was successful
-        if [ $? -ne 0 ]; then
-            echo "Error: Failed to create floating IP."
-            exit 1
-        fi
-        floating_ip_id=$(echo "$floating_ip_info" | jq -r '.id')
-        floating_ip_address=$(echo "$floating_ip_info" | jq -r '.floating_ip_address')
-
-        # Step 2: Add a description to the floating IP
-        openstack floating ip set --description "$USER" "$floating_ip_id"
-
-        # Export the floating IP address as SERVER_IP
-        export SERVER_IP="$floating_ip_address"
-
-        echo "Created and set new floating IP $SERVER_IP"
-    fi 
-
-    # whether floating ip was found or created, add floating ip to teardown script
-    echo "openstack floating ip delete $SERVER_IP" >> teardown.sh
-fi
-
-
-# Develooper note: Remove lines starting with the server IP from .ssh/known_hosts
-# so that if the IP is the same as a previous deployment, we don't
-# get a security warning about known hosts
-echo "Removing $SERVER_IP from list of known hosts"
-sed -i.bak "/^$SERVER_IP/d" "$HOME/.ssh/known_hosts"
-if [ $? -ne 0 ]; then 
-    echo "[Warning] removal of known hosts associated with $SERVER_IP failed. This may result in a warning about a man in the middle attack in later steps, which can be ignored"
-else
-    echo "Successfully removed $SERVER_IP from $HOME/.ssh/known_hosts"
-fi
 
 echo "Getting the network ID associated with sharednet1..."
-export NETWORK_ID=$(openstack network show --format value -c id $PRIVATE_NETWORK_NAME)
+NETWORK_ID=$(openstack network show --format value -c id $PRIVATE_NETWORK_NAME)
 echo "The network id is $NETWORK_ID"
+
+echo "#######################################################"
+echo "#                                                     #"
+echo "#                    FLOATING IP                      #"
+echo "#                                                     #"
+echo "#######################################################"
+
+echo "Requesting a floating IP..."
+# Request a public floating IP (in the 'public' network)
+export SERVER_IP=$(openstack floating ip create public --format value -c floating_ip_address)
+
+# Check if the command was successful
+if [ $? -ne 0 ]; then
+    echo "Error: Failed to create floating IP."
+    exit 1
+fi
+
+echo "Public IP for this lab is $SERVER_IP"
+
+# Remove lines starting with the server IP from .ssh/known_hosts
+sed -i.bak "/^$SERVER_IP/d" "$HOME/.ssh/known_hosts"
+
+echo "Removed $SERVER_IP from $HOME/.ssh/known_hosts"
+
+# add floating ip to teardown script
+echo "openstack floating ip delete $SERVER_IP" >> teardown.sh
 
 echo "#######################################################"
 echo "#                                                     #"
 echo "#                  SECURITY GROUP                     #"
 echo "#                                                     #"
 echo "#######################################################"
+
+echo "Creating security group..."
 
 # Check if the security group already exists
 existing_sg=$(openstack security group list --format value -c Name | grep -w "$SECURITY_GROUP")
@@ -155,75 +119,37 @@ if [ -z "$existing_sg" ]; then
     openstack security group rule create --proto tcp --dst-port 8888 --ingress "$SECURITY_GROUP"
 else
     # Security group already exists
-    echo "Security group with access to ports 22, 80, and 8888 already exists: $SECURITY_GROUP"
+    echo "Security group already exists: $SECURITY_GROUP"
 fi
 
-echo "#######################################################"
-echo "#                                                     #"
-echo "#                      SERVER                         #"
-echo "#                                                     #"
-echo "#######################################################"
+# add line to teardown script
+echo "openstack security group delete $SECURITY_GROUP" >> teardown.sh
 
-server_info=$(openstack server list --name "$SERVER_NAME" --format json)
-server_name=$(echo "$server_info" | jq -r '.[0].Name')
+echo "#########################################################"
+echo "#                                                       #"
+echo "#                BUILDING SERVER                        #"
+echo "#                                                       #"
+echo "#.    Warning: this could take from 10 - 15 minutes     #"
+echo "#                                                       #"
+echo "#########################################################"
 
-if [ -n "$server_info" ] && [ "$server_name" == "$SERVER_NAME" ]; then
-    server_status=$(echo "$server_info" | jq -r '.[0].Status')
-    if [[ "$server_status" == "ACTIVE" || "$server_status" == "BUILD" ]]; then
-        echo "Server $server_name associated with lease $LEASE_NAME exists and is in a usable state: $server_status."
-    else
-        echo "Server $server_name associated with lease $LEASE_NAME exists but is not in a usable state: $server_status."
-        echo "Deleting server (2 minute wait)..."
-        openstack server delete $SERVER_NAME
-        wait 120
-        echo "Creating new server..."
-        openstack server create \
-          --flavor "baremetal" \
-          --image "CC-Ubuntu20.04" \
-          --nic net-id="$NETWORK_ID" \
-          --hint reservation="$LEASE_ID" \
-          --key-name="$SSHKEY_NAME" \
-          --security-group "$SECURITY_GROUP"  \
-          "$SERVER_NAME"
-    
-        echo "#########################################################"
-        echo "#                                                       #"
-        echo "#                BUILDING SERVER                        #"
-        echo "#                                                       #"
-        echo "#.    Warning: this could take from 10 - 15 minutes     #"
-        echo "#                                                       #"
-        echo "#########################################################"
-fi
-else
-    echo "No server associated with lease $LEASE_NAME."
-    echo "Creating server...."
-    openstack server create \
-      --flavor "baremetal" \
-      --image "CC-Ubuntu20.04" \
-      --nic net-id="$NETWORK_ID" \
-      --hint reservation="$LEASE_ID" \
-      --key-name="$SSHKEY_NAME" \
-      --security-group "$SECURITY_GROUP"  \
-      "$SERVER_NAME"
-
-    echo "#########################################################"
-    echo "#                                                       #"
-    echo "#                BUILDING SERVER                        #"
-    echo "#                                                       #"
-    echo "#.    Warning: this could take from 10 - 15 minutes     #"
-    echo "#                                                       #"
-    echo "#########################################################"
-fi
+openstack server create \
+  --flavor "baremetal" \
+  --image "CC-Ubuntu20.04" \
+  --nic net-id="$NETWORK_ID" \
+  --hint reservation="$LEASE_ID" \
+  --key-name="$SSHKEY_NAME" \
+  --security-group "$SECURITY_GROUP"  \
+  "$SERVER_NAME"
 
 # add line to teardown script
 echo "openstack server delete $SERVER_NAME" >> teardown.sh
 
-
 # Variables
+expected_status="ACTIVE"
 timeout_minutes=20
 check_interval=60  # Check every 60 seconds
 dot_interval=10  # Print a dot every 10 seconds
-description_to_search="$USER"
 
 # Start waiting and checking loop
 elapsed_time=0
@@ -234,13 +160,13 @@ do
     echo "Current server status: $server_status"
 
     # Break the loop if the expected status is reached
-    if [ "$server_status" == "ACTIVE" ]; then
-        echo "Server $SERVER_NAME is now ACTIVE."
+    if [ "$server_status" == "$expected_status" ]; then
+        echo "Server $SERVER_NAME is now $expected_status."
         break
     fi
 
     # Print dots to indicate waiting
-    echo -n "Waiting for server to become ACTIVE: "
+    echo -n "Waiting for server to become $expected_status: "
     for ((i=0; i<$check_interval; i+=$dot_interval))
     do
         sleep $dot_interval
@@ -253,37 +179,12 @@ do
 done
 
 # Final check and message
-if [ "$server_status" != "ACTIVE" ]; then
-    echo "Timeout reached. Server $SERVER_NAME did not become ACTIVE within $timeout_minutes minutes."
-    exit 1
+if [ "$server_status" != "$expected_status" ]; then
+    echo "Timeout reached. Server $SERVER_NAME did not become $expected_status within $timeout_minutes minutes."
 fi
 
-echo "#######################################################"
-echo "#                                                     #"
-echo "#                    FLOATING IP                      #"
-echo "#                                                     #"
-echo "#######################################################"
-
-# Check if there is a floating IP attached to the server
-attached_ip=$(openstack server show "$SERVER_NAME" --format json | jq -r '.addresses | to_entries[] | .value[] | select(.OS-EXT-IPS:type == "floating") | .addr')
-
-if [ -n "$attached_ip" ]; then
-    echo "Floating IP $attached_ip is already attached to server $SERVER_NAME."
-    export SERVER_IP=$attached_ip
-else
-    echo "No floating IP attached to server $SERVER_NAME"
-    echo "Creating floating IP..."
-
-    # Create a new floating IP and capture its address
-    floating_ip_address=$(openstack floating ip create public --format value -c floating_ip_address)
-
-    # Attach the new floating IP to the server
-    openstack server add floating ip "$SERVER_NAME" "$floating_ip_address"
-    export SERVER_IP=$floating_ip_address
-
-    echo "Created and attached new floating IP: $SERVER_IP to server $SERVER_NAME."
-
-fi
+echo "Assigning public floating IP to $SERVER_NAME..."
+openstack server add floating ip "$SERVER_NAME" "$SERVER_IP"
 
 echo "#######################################################"
 echo "#                                                     #"
@@ -338,3 +239,25 @@ echo "Transfering remote_setup.sh to remote home directory..."
 scp remote_setup.sh cc@$SERVER_IP:$REMOTE_HOME
 eval $LOGIN_COMMAND sudo chmod 755 remote_setup.sh
 eval $LOGIN_COMMAND ./remote_setup.sh
+
+# Default value
+default="yes"
+
+# Prompt the user
+read -p "Do you want to run remote startup? [Y/n]: " response
+
+# Set default response if the user just presses Enter
+response=${response:-$default}
+
+# Convert the response to lowercase
+response=$(echo "$response" | tr '[:upper:]' '[:lower:]')
+
+# Check the response
+if [[ "$response" == "yes" || "$response" == "y" ]]; then
+    echo "Running remote startup..."
+    # Place the command to run the remote startup here
+    eval $LOGIN_COMMAND ./remote_setup.sh
+else
+    echo "You can use the command: eval \$LOGIN_COMMAND ./remote_setup.sh"
+    exit 0
+fi
