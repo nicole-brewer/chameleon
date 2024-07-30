@@ -2,7 +2,6 @@
 
 source openrc.sh
 
-
 export PRIVATE_NETWORK_NAME="sharednet1" # default/recommended network
 export PUBLIC_NETWORK_NAME="public" # default/recommended network
 export NODE_TYPE="compute_skylake" # a popular Intel CPU good for general applications
@@ -27,7 +26,7 @@ echo "$SERVER_NAME, has status: $server_status"
 export SERVER_IP=$(openstack server show "$SERVER_NAME" -f json | jq -r '.addresses.sharednet1[] | select(test("^\\d{3}"))')
 echo "The fixed IP associated with $SERVER_NAME is $SERVER_IP"
 
-export LOGIN_COMMAND="ssh -i $SSHKEY_FILE -o ConnectTimeout=10 cc@$SERVER_IP"
+export LOGIN_COMMAND="ssh -i $SSHKEY_FILE -o ConnectTimeout=10 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null cc@$SERVER_IP"
 echo "Log into the node with $LOGIN_COMMAND"
 echo "Run a command with"
 echo "     eval \$LOGIN_COMMAND <cmd>"

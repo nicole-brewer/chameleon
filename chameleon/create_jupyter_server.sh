@@ -4,7 +4,7 @@ echo "Soucing openrc.sh. You may be asked to authenticate..."
 source openrc.sh
 
 # Set default values
-default_sshkey_file='$HOME/.ssh/chameleon-jupyter-interface'
+default_sshkey_file='~/.ssh/chameleon-jupyter-interface'
 #"$HOME/work/.ssh/id_rsa"
 
 # Prompt the user for input with default values
@@ -17,11 +17,17 @@ export SSHKEY_NAME="chameleon-jupyter-interface"
 export LEASE_NAME="$USER-test"
 export SERVER_NAME="$USER-server"
 export SECURITY_GROUP="${USER}-security-group"
-
 export PRIVATE_NETWORK_NAME="sharednet1" # default/recommended network
 export PUBLIC_NETWORK_NAME="public" # default/recommended network
 export NODE_TYPE="compute_skylake" # a popular Intel CPU good for general applications
 export NUM_SERVERS=1
+
+echo "Environment variables for provisioned resources can be found in lease.env"
+echo "    source lease.env" 
+echo "export LEASE_NAME=\"$LEASE_NAME\"" > lease.env
+echo "export SERVER_NAME=\"$SERVER_NAME\"" >> lease.env
+echo "export NODE_TYPE=\"$NODE_TYPE\"" >> lease.env
+echo "export NUM_SERVER=\"$NUM_SERVERS\"" >> lease.env
 
 echo "#######################################################"
 echo "#                                                     #"
@@ -31,7 +37,6 @@ echo "#######################################################"
 
 echo "Creating lease..."
 lease_status=""
-
 
 blazar lease-create --physical-reservation \
       min="$NUM_SERVERS",max=$((NUM_SERVERS + 1 )),resource_properties='["=", "$node_type", "'"$NODE_TYPE"'"]' "$LEASE_NAME"
@@ -49,16 +54,18 @@ done
 echo "Lease $LEASE_NAME is ready for business."
 echo "Creating teardown.sh for deleting resources allocated in this script..."
 echo "You may teardown reserved resources at any time using ./teardown.sh" 
-echo "blazar lease-delete $LEASE_NAME" > teardown.sh
+echo "source openrc.sh" > teardown.sh
+echo "blazar lease-delete $LEASE_NAME" >> teardown.sh
    
 echo "Getting lease id..."
 LEASE_ID=$(blazar lease-show  --format value -c  reservations "$LEASE_NAME" |grep \"id\"| cut -d \" -f4)
 echo "The lease id is $LEASE_ID"
-
+echo "export LEASE_ID=\"$LEASE_ID\"" >> lease.env
 
 echo "Getting the network ID associated with sharednet1..."
 NETWORK_ID=$(openstack network show --format value -c id $PRIVATE_NETWORK_NAME)
 echo "The network id is $NETWORK_ID"
+echo "export NETWORK_ID=\"$NETWORK_ID\"" >> lease.env
 
 echo "#######################################################"
 echo "#                                                     #"
@@ -69,6 +76,7 @@ echo "#######################################################"
 echo "Requesting a floating IP..."
 # Request a public floating IP (in the 'public' network)
 export SERVER_IP=$(openstack floating ip create public --format value -c floating_ip_address)
+echo "export SERVER_IP=\"$SERVER_IP\"" >> lease.env
 
 # Check if the command was successful
 if [ $? -ne 0 ]; then
@@ -122,9 +130,6 @@ else
     echo "Security group already exists: $SECURITY_GROUP"
 fi
 
-# add line to teardown script
-echo "openstack security group delete $SECURITY_GROUP" >> teardown.sh
-
 echo "#########################################################"
 echo "#                                                       #"
 echo "#                BUILDING SERVER                        #"
@@ -144,6 +149,7 @@ openstack server create \
 
 # add line to teardown script
 echo "openstack server delete $SERVER_NAME" >> teardown.sh
+echo "export SERVER_NAME=\"$SERVER_NAME\"" >> lease.env
 
 # Variables
 expected_status="ACTIVE"
@@ -199,7 +205,8 @@ echo -n "Checking connection to $SERVER_IP on port 22..."
 
 # Define the SSH command
 
-export LOGIN_COMMAND="ssh -i $SSHKEY_FILE -o ConnectTimeout=10 cc@$SERVER_IP"
+export LOGIN_COMMAND="ssh -i $SSHKEY_FILE -o ConnectTimeout=10 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null cc@$SERVER_IP"
+echo "export LOGIN_COMMAND=\"$LOGIN_COMMAND\"" >> lease.env
 
 # Define the timeout and interval
 timeout=900  # 15 minutes in seconds
@@ -217,7 +224,7 @@ while [ $elapsed -lt $timeout ]; do
         echo ""
         echo "To execute a command without logging in, use"
         echo ""
-        echo "eval \"$LOGIN_COMMAND\" <LOGIN_COMMAND>"
+        echo "eval \"$LOGIN_COMMAND\" cmd"
         break
     else
         echo -n "."  # Print a dot without a newline
@@ -236,7 +243,7 @@ fi
 
 echo "The remote directory is $REMOTE_HOME"
 echo "Transfering remote_setup.sh to remote home directory..."
-scp remote_setup.sh cc@$SERVER_IP:$REMOTE_HOME
+scp -i $SSHKEY_FILE remote_setup.sh cc@$SERVER_IP:$REMOTE_HOME
 eval $LOGIN_COMMAND sudo chmod 755 remote_setup.sh
 eval $LOGIN_COMMAND ./remote_setup.sh
 
