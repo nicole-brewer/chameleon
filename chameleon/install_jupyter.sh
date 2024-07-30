@@ -1,7 +1,7 @@
 #!/bin/bash
 
 if ! command -v jupyter &> /dev/null; then
-    pip3 install jupyter notebook
+    pip3 install jupyter notebook jupyterlab
 fi
 
 # Path to the .bashrc file
@@ -22,9 +22,9 @@ fi
 # Source the .bashrc to apply changes immediately
 source "$bashrc_path"
 
-# Start Jupyter Notebook using 0.0.0.0 to bind to all network interfaces
-jupyter notebook --ServerApp.ip='0.0.0.0' --ServerApp.open_browser=False --ServerApp.port=8888
 sudo firewall-cmd --permanent --add-port=8888/tcp
 sudo firewall-cmd --permanent --add-port=22/tcp
 sudo firewall-cmd --permanent --add-service=http
 sudo firewall-cmd --reload
+
+
